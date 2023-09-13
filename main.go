@@ -21,18 +21,47 @@ type OplogEntry struct {
 func GenerateSQL(oplog string) ([]string, error) {
 	sqls := []string{}
 
-	var oplogObj OplogEntry
-	if err := json.Unmarshal([]byte(oplog), &oplogObj); err != nil {
-		return sqls, err
+	var oplogEntries []OplogEntry
+	if err := json.Unmarshal([]byte(oplog), &oplogEntries); err != nil {
+
+		var oplogObj OplogEntry
+		if err := json.Unmarshal([]byte(oplog), &oplogObj); err != nil {
+			return sqls, err
+		}
+
+		oplogEntries = append(oplogEntries, oplogObj)
 	}
+
+	cacheMap := make(map[string]bool)
+	for _, oplogEntry := range oplogEntries {
+		innerSqls, err := generateSQL(oplogEntry, cacheMap)
+		if err != nil {
+			return []string{}, err
+		}
+		sqls = append(sqls, innerSqls...)
+	}
+
+	return sqls, nil
+}
+
+func generateSQL(oplogObj OplogEntry, cacheMap map[string]bool) ([]string, error) {
+	sqls := []string{}
 
 	switch oplogObj.Op {
 	case "i":
 		// Create schema
-		sqls = generateCreateSchemaSQL(oplogObj, sqls)
+		nsParts := strings.Split(oplogObj.NS, ".")
+		schemaName := nsParts[0]
+		if exits := cacheMap[schemaName]; !exits {
+			sqls = append(sqls, generateCreateSchemaSQL(schemaName))
+			cacheMap[schemaName] = true
+		}
 
 		// Create table
-		sqls = append(sqls, generateCreateTableSQL(oplogObj))
+		if exits := cacheMap[oplogObj.NS]; !exits {
+			sqls = append(sqls, generateCreateTableSQL(oplogObj))
+			cacheMap[oplogObj.NS] = true
+		}
 
 		sql, err := generateInsertSQL(oplogObj)
 		if err != nil {
@@ -56,10 +85,8 @@ func GenerateSQL(oplog string) ([]string, error) {
 	return sqls, nil
 }
 
-func generateCreateSchemaSQL(oplogObj OplogEntry, sqls []string) []string {
-	nsParts := strings.Split(oplogObj.NS, ".")
-	sqls = append(sqls, fmt.Sprintf("CREATE SCHEMA %s;", nsParts[0]))
-	return sqls
+func generateCreateSchemaSQL(schemaName string) string {
+	return fmt.Sprintf("CREATE SCHEMA %s;", schemaName)
 }
 
 func generateCreateTableSQL(oplogObj OplogEntry) string {
