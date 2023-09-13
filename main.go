@@ -59,8 +59,10 @@ func generateSQL(oplogObj OplogEntry, cacheMap map[string]bool) ([]string, error
 
 		// Create table
 		if exits := cacheMap[oplogObj.NS]; !exits {
-			sqls = append(sqls, generateCreateTableSQL(oplogObj))
+			sqls = append(sqls, generateCreateTableSQL(oplogObj, cacheMap))
 			cacheMap[oplogObj.NS] = true
+		} else if isEligibleForAlterTable(oplogObj, cacheMap) {
+			sqls = append(sqls, generateAlterTableSQL(oplogObj, cacheMap))
 		}
 
 		sql, err := generateInsertSQL(oplogObj)
@@ -89,7 +91,7 @@ func generateCreateSchemaSQL(schemaName string) string {
 	return fmt.Sprintf("CREATE SCHEMA %s;", schemaName)
 }
 
-func generateCreateTableSQL(oplogObj OplogEntry) string {
+func generateCreateTableSQL(oplogObj OplogEntry, cacheMap map[string]bool) string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("CREATE TABLE %s (", oplogObj.NS))
 	columnNames := getColumnNames(oplogObj.O)
@@ -99,11 +101,44 @@ func generateCreateTableSQL(oplogObj OplogEntry) string {
 		value := oplogObj.O[columnName]
 		colDataType := getColumnSQLDataType(columnName, value)
 
+		cacheKey := fmt.Sprintf("%s.%s", oplogObj.NS, columnName)
+		cacheMap[cacheKey] = true
+
 		sb.WriteString(fmt.Sprintf("%s%s %s", sep, columnName, colDataType))
 		sep = ", "
 	}
 
 	sb.WriteString(");")
+	return sb.String()
+}
+
+func isEligibleForAlterTable(oplogObj OplogEntry, cacheMap map[string]bool) bool {
+	for columnName := range oplogObj.O {
+		cacheKey := fmt.Sprintf("%s.%s", oplogObj.NS, columnName)
+		if !cacheMap[cacheKey] {
+			return true
+		}
+	}
+	return false
+}
+
+func generateAlterTableSQL(oplogObj OplogEntry, cacheMap map[string]bool) string {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("ALTER TABLE %s", oplogObj.NS))
+
+	sep := " "
+	for columnName := range oplogObj.O {
+		value := oplogObj.O[columnName]
+		columnDataType := getColumnSQLDataType(columnName, value)
+
+		cacheKey := fmt.Sprintf("%s.%s", oplogObj.NS, columnName)
+		if !cacheMap[cacheKey] {
+			sb.WriteString(fmt.Sprintf("%sADD COLUMN %s %s", sep, columnName, columnDataType))
+			sep = ", "
+		}
+	}
+
+	sb.WriteString(";")
 	return sb.String()
 }
 
